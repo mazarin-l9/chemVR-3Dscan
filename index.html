@@ -1,0 +1,406 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>scan2png 点群変換</title>
+<style>
+  :root { --bg:#14171f; --card:#1e2330; --line:#323a4d; --text:#eef1f6; --sub:#9aa4b8; --accent:#3d8bfd; --ok:#2fa35a; --bad:#d9443b; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:16px/1.6 system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 22px; margin: 4px 0 12px; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-bottom: 14px; }
+  h2 { font-size: 17px; margin: 0 0 10px; }
+  label { display:block; margin: 10px 0 4px; color: var(--sub); font-size: 14px; }
+  input[type=text], input[type=password], input[type=number], select { width:100%; font-size:17px; padding:10px; border-radius:8px; border:1px solid var(--line); background:#0f1218; color:var(--text); }
+  input[type=file] { width:100%; font-size:16px; }
+  input[type=range] { width:100%; }
+  .row { display:flex; gap:10px; }
+  .row > * { flex:1; }
+  button { font-size:17px; padding:12px 14px; border-radius:10px; border:0; background:var(--accent); color:white; width:100%; margin-top:10px; font-weight:600; }
+  button.secondary { background:#3a4358; }
+  button:disabled { opacity:.45; }
+  .msg { margin-top:10px; padding:10px; border-radius:8px; background:#0f1218; white-space:pre-wrap; font-size:15px; }
+  .msg.ok { border-left:4px solid var(--ok); } .msg.bad { border-left:4px solid var(--bad); } .msg.busy { border-left:4px solid #e0a22b; }
+  canvas#preview { width:100%; aspect-ratio: 1 / 1; background:#0b0d12; border-radius:10px; touch-action:none; display:block; margin-top:10px; }
+  .small { font-size:13px; color:var(--sub); }
+  details summary { cursor:pointer; font-weight:600; }
+  code { background:#0f1218; padding:1px 5px; border-radius:4px; word-break:break-all; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<main>
+  <h1>scan2png（スキャン → 点群PNG）</h1>
+
+  <section>
+    <h2>1. スキャンのファイルを選ぶ</h2>
+    <input type="file" id="file" multiple accept=".ply,.spz,.glb,.gltf,.obj,.mtl,.fbx,.zip,.usdz,.jpg,.jpeg,.png,.bin">
+    <p class="small">対応: PLY（点群・メッシュ・3D Gaussian Splatting）、SPZ、GLB、OBJ（.mtl と画像を一緒に選ぶか、ZIP のまま）、FBX（ZIP 可）、USDZ（簡易）</p>
+    <label for="title">題名（ワールドのボタンと台に表示。40文字まで）</label>
+    <input type="text" id="title" maxlength="40" placeholder="例: 会場の花">
+    <div class="row">
+      <div><label for="slot">スロット番号（1〜64）</label><input type="number" id="slot" min="1" max="64" value="1"></div>
+      <div><label for="up">上の向き</label>
+        <select id="up"><option value="y">Y が上（ふつう）</option><option value="z">Z が上</option><option value="-y">上下さかさま</option><option value="-z">−Z が上</option></select></div>
+    </div>
+    <label for="budget">点の数: <b id="budgetText"></b>（Quest は 12万点くらいまでがおすすめ・上限 20万）</label>
+    <input type="range" id="budget" min="20000" max="200000" step="10000" value="120000">
+    <label><input type="checkbox" id="outliers" checked> 遠くに飛んだ点（ゴミ）を除く</label>
+    <button id="convert" disabled>2. 変換する</button>
+    <div id="convertMsg" class="msg" hidden></div>
+  </section>
+
+  <section id="resultSection" hidden>
+    <h2>3. 確認して保存</h2>
+    <canvas id="preview" width="720" height="720"></canvas>
+    <p class="small">指でドラッグすると回せます（ワールドで正面から見た向きから始まります）。</p>
+    <div id="resultInfo" class="msg"></div>
+    <button id="download">PNG を保存（slotN.png）</button>
+    <button id="share" class="secondary" hidden>共有 / ファイルに保存</button>
+  </section>
+
+  <section>
+    <details id="ghDetails">
+      <summary>4. GitHub に直接アップロード（任意・いちばん速い）</summary>
+      <p class="small">GitHub の「Fine-grained token」（このリポジトリの Contents: Read and write だけ）を貼ると、このページから <code>scans/slotN.png</code> に上書きアップロードします。トークンはこの端末にだけ保存されます。</p>
+      <label for="repo">リポジトリ（owner/name）</label>
+      <input type="text" id="repo" value="mazarin-l9/chemVR-3Dscan">
+      <label for="token">トークン</label>
+      <input type="password" id="token" placeholder="github_pat_…">
+      <label><input type="checkbox" id="remember" checked> この端末に覚えておく</label>
+      <button id="upload" disabled>GitHub にアップロード</button>
+      <div id="uploadMsg" class="msg" hidden></div>
+    </details>
+  </section>
+
+  <section>
+    <h2>5. 公開された画像を確かめる</h2>
+    <p class="small">ワールドで読む前に、URL の画像が壊れていないか（再圧縮・縮小されていないか）と題名を確かめます。</p>
+    <label for="checkUrl">URL</label>
+    <input type="text" id="checkUrl" placeholder="https://mazarin-l9.github.io/chemVR-3Dscan/scans/slot1.png">
+    <button id="check" class="secondary">確かめる</button>
+    <div id="checkMsg" class="msg" hidden></div>
+  </section>
+  <p class="small">変換はすべてこの端末の中で行います（ファイルはどこにも送りません。GitHub へのアップロードを押したときだけ送ります）。</p>
+</main>
+
+<script type="module">
+import { encodePointCloud, decodePointCloud, pngBytes, parsePLY, parseSPZ, buildCloud, MAX_POINTS } from "./scan2png-core.js";
+
+const $ = (id) => document.getElementById(id);
+let files = [];
+let result = null; // { png: Uint8Array, cloud, title, slot }
+
+const pagesBase = () => { const [o, r] = $("repo").value.trim().split("/"); return `https://${o}.github.io/${r}/scans/`; };
+$("checkUrl").placeholder = pagesBase() + "slot1.png";
+
+// ---- 設定を覚える ----
+try {
+  const saved = JSON.parse(localStorage.getItem("scan2png") || "{}");
+  if (saved.repo) $("repo").value = saved.repo;
+  if (saved.token) $("token").value = saved.token;
+  if (saved.slot) $("slot").value = saved.slot;
+} catch {}
+function remember() {
+  try {
+    localStorage.setItem("scan2png", JSON.stringify({ repo: $("repo").value, token: $("remember").checked ? $("token").value : "", slot: $("slot").value }));
+  } catch {}
+}
+
+function show(el, text, kind) { el.hidden = false; el.textContent = text; el.className = "msg " + (kind || ""); }
+const budgetText = () => $("budget").value / 10000 + " 万点";
+$("budgetText").textContent = budgetText();
+$("budget").oninput = () => $("budgetText").textContent = budgetText();
+
+$("file").onchange = () => {
+  files = [...$("file").files];
+  $("convert").disabled = files.length === 0;
+  if (!$("title").value && files.length) $("title").value = files[0].name.replace(/\.[^.]+$/, "").slice(0, 40);
+};
+
+// ---- 変換 ----
+$("convert").onclick = async () => {
+  const msg = $("convertMsg");
+  $("convert").disabled = true;
+  try {
+    show(msg, "読み込み中…", "busy");
+    const source = await loadSource(files, (t) => show(msg, t, "busy"));
+    show(msg, "点を作っています…", "busy");
+    await new Promise(r => setTimeout(r, 30));
+    const cloud = buildCloud(source, { budget: +$("budget").value, up: $("up").value, outliers: $("outliers").checked });
+    const title = $("title").value.trim();
+    const img = encodePointCloud(cloud.positions, cloud.colors, { title, date: new Date() });
+    const back = decodePointCloud(img.width, img.height, img.rgba); // 書いた内容を読み戻して確かめる
+    if (!back.ok) throw new Error("作った画像の読み戻しに失敗しました: " + back.reason);
+    let png;
+    try { png = await pngBytes(img.width, img.height, img.rgba); }
+    catch { png = await canvasPng(img); }
+    const slot = Math.min(64, Math.max(1, +$("slot").value | 0));
+    result = { png, back, title, slot };
+    $("resultSection").hidden = false;
+    show($("resultInfo"),
+      `点の数: ${back.count.toLocaleString()}（${source.kind}）\n画像: ${img.width} × ${img.height} px、${(png.length / 1024 / 1024).toFixed(2)} MB\n` +
+      `大きさ: ${(back.max[0] - back.min[0]).toFixed(2)} × ${(back.max[1] - back.min[1]).toFixed(2)} × ${(back.max[2] - back.min[2]).toFixed(2)} m\n` +
+      `題名: ${back.title || "（なし）"}　日時: ${back.date}\n保存名: slot${slot}.png`, "ok");
+    $("download").textContent = `PNG を保存（slot${slot}.png）`;
+    $("share").hidden = !(navigator.canShare && navigator.canShare({ files: [new File([png], "a.png", { type: "image/png" })] }));
+    $("upload").disabled = false;
+    show(msg, "変換できました。下で確認してください。", "ok");
+    startPreview(back);
+    remember();
+    $("resultSection").scrollIntoView({ behavior: "smooth" });
+  } catch (e) {
+    console.error(e);
+    show(msg, "変換できませんでした: " + (e.message || e), "bad");
+  } finally {
+    $("convert").disabled = files.length === 0;
+  }
+};
+
+async function canvasPng(img) {
+  const c = document.createElement("canvas");
+  c.width = img.width; c.height = img.height;
+  c.getContext("2d").putImageData(new ImageData(img.rgba, img.width, img.height), 0, 0);
+  const blob = await new Promise(r => c.toBlob(r, "image/png"));
+  return new Uint8Array(await blob.arrayBuffer());
+}
+
+$("download").onclick = () => {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([result.png], { type: "image/png" }));
+  a.download = `slot${result.slot}.png`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+};
+$("share").onclick = async () => {
+  try { await navigator.share({ files: [new File([result.png], `slot${result.slot}.png`, { type: "image/png" })] }); } catch {}
+};
+
+// ---- ファイルの読み込み ----
+async function loadSource(list, progress) {
+  // ZIP は中身を展開して一緒に扱う
+  const all = [];
+  for (const f of list) {
+    if (/\.zip$/i.test(f.name)) {
+      progress("ZIP を展開しています…");
+      const { unzipSync } = await import("three/addons/libs/fflate.module.js");
+      const entries = unzipSync(new Uint8Array(await f.arrayBuffer()));
+      for (const [name, data] of Object.entries(entries)) if (!name.endsWith("/") && !name.startsWith("__MACOSX")) all.push(new File([data], name.split("/").pop()));
+    } else all.push(f);
+  }
+  const by = (re) => all.find(f => re.test(f.name));
+  const main = by(/\.spz$/i) || by(/\.ply$/i) || by(/\.glb$/i) || by(/\.gltf$/i) || by(/\.obj$/i) || by(/\.fbx$/i) || by(/\.usdz$/i);
+  if (!main) throw new Error("スキャンのファイル（PLY / SPZ / GLB / OBJ / FBX）が見つかりません");
+  progress(`${main.name} を読んでいます（${(main.size / 1024 / 1024).toFixed(1)} MB）…`);
+  const buf = await main.arrayBuffer();
+  if (/\.spz$/i.test(main.name)) return { cloud: await parseSPZ(buf), kind: "SPZ（Gaussian Splatting）" };
+  if (/\.ply$/i.test(main.name)) {
+    const cloud = parsePLY(buf);
+    return { cloud, kind: cloud.kind === "splat" ? "PLY（Gaussian Splatting）" : cloud.faces ? "PLY メッシュ" : "PLY 点群" };
+  }
+  return { meshes: await loadMeshes(main, buf, all, progress), kind: main.name.split(".").pop().toUpperCase() + " メッシュ" };
+}
+
+async function loadMeshes(main, buf, all, progress) {
+  const THREE = await import("three");
+  const manager = new THREE.LoadingManager();
+  const urls = new Map(all.map(f => [f.name.toLowerCase(), URL.createObjectURL(f)]));
+  manager.setURLModifier((url) => {
+    const name = decodeURIComponent(url.split(/[\\/]/).pop().split("?")[0]).toLowerCase();
+    return urls.get(name) || url;
+  });
+  let root;
+  const ext = main.name.split(".").pop().toLowerCase();
+  if (ext === "glb" || ext === "gltf") {
+    const { GLTFLoader } = await import("three/addons/loaders/GLTFLoader.js");
+    const { DRACOLoader } = await import("three/addons/loaders/DRACOLoader.js");
+    const { MeshoptDecoder } = await import("three/addons/libs/meshopt_decoder.module.js");
+    const loader = new GLTFLoader(manager);
+    const draco = new DRACOLoader();
+    draco.setDecoderPath("https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/libs/draco/gltf/");
+    loader.setDRACOLoader(draco);
+    loader.setMeshoptDecoder(MeshoptDecoder);
+    root = (await new Promise((res, rej) => loader.parse(buf, "", res, rej))).scene;
+  } else if (ext === "obj") {
+    const { OBJLoader } = await import("three/addons/loaders/OBJLoader.js");
+    const { MTLLoader } = await import("three/addons/loaders/MTLLoader.js");
+    const loader = new OBJLoader(manager);
+    const mtl = all.find(f => /\.mtl$/i.test(f.name));
+    if (mtl) {
+      const materials = new MTLLoader(manager).parse(await mtl.text(), "");
+      materials.preload();
+      loader.setMaterials(materials);
+    }
+    root = loader.parse(new TextDecoder().decode(buf));
+  } else if (ext === "fbx") {
+    const { FBXLoader } = await import("three/addons/loaders/FBXLoader.js");
+    root = new FBXLoader(manager).parse(buf, "");
+  } else if (ext === "usdz") {
+    const { USDZLoader } = await import("three/addons/loaders/USDZLoader.js");
+    root = new USDZLoader(manager).parse(buf);
+  } else throw new Error("この形式は読めません: " + ext);
+
+  progress("テクスチャを読んでいます…");
+  root.updateMatrixWorld(true);
+  const meshes = [];
+  const meshList = [];
+  root.traverse(o => { if (o.isMesh && o.geometry) meshList.push(o); });
+  for (const o of meshList) {
+    const g = o.geometry.index ? o.geometry : o.geometry; // そのまま
+    const pos = g.getAttribute("position");
+    const positions = new Float32Array(pos.count * 3);
+    const v = new THREE.Vector3();
+    for (let i = 0; i < pos.count; i++) { v.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld); positions.set([v.x, v.y, v.z], i * 3); }
+    const uvAttr = g.getAttribute("uv");
+    const uvs = uvAttr ? Float32Array.from({ length: uvAttr.count * 2 }, (_, k) => k % 2 ? uvAttr.getY(k >> 1) : uvAttr.getX(k >> 1)) : null;
+    const colAttr = g.getAttribute("color");
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    const groups = g.groups.length ? g.groups : [{ start: 0, count: g.index ? g.index.count : pos.count, materialIndex: 0 }];
+    for (const grp of groups) {
+      const mat = mats[grp.materialIndex ?? 0] || mats[0];
+      const idx = new Uint32Array(grp.count);
+      for (let k = 0; k < grp.count; k++) idx[k] = g.index ? g.index.getX(grp.start + k) : grp.start + k;
+      let colors = null;
+      if (colAttr && mat?.vertexColors !== false) {
+        colors = new Float32Array(colAttr.count * 3);
+        for (let i = 0; i < colAttr.count; i++) { colors[i * 3] = toSrgb(colAttr.getX(i)); colors[i * 3 + 1] = toSrgb(colAttr.getY(i)); colors[i * 3 + 2] = toSrgb(colAttr.getZ(i)); }
+      }
+      const tint = mat?.color ? [toSrgb(mat.color.r), toSrgb(mat.color.g), toSrgb(mat.color.b)] : [1, 1, 1];
+      const texture = mat?.map ? await texturePixels(mat.map) : null;
+      meshes.push({ positions, indices: idx, uvs, colors, texture, tint });
+    }
+  }
+  urls.forEach(u => URL.revokeObjectURL(u));
+  if (!meshes.length) throw new Error("メッシュが見つかりません");
+  return meshes;
+}
+
+const toSrgb = (c) => c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1 / 2.4) - 0.055;
+
+// テクスチャの画素（上の行から RGBA）。読み込み途中の画像は待つ。大きすぎる画像は 2048 に縮める
+async function texturePixels(tex) {
+  for (let t = 0; t < 200 && !imageReady(tex.image); t++) await new Promise(r => setTimeout(r, 50));
+  const img = tex.image;
+  if (!imageReady(img)) return null;
+  if (img.data && img.width) { // DataTexture（下の行から）
+    return { width: img.width, height: img.height, data: img.data.length === img.width * img.height * 4 ? img.data : null, flipY: !tex.flipY };
+  }
+  const w0 = img.width || img.naturalWidth, h0 = img.height || img.naturalHeight;
+  const s = Math.min(1, 2048 / Math.max(w0, h0));
+  const c = document.createElement("canvas");
+  c.width = Math.max(1, Math.round(w0 * s)); c.height = Math.max(1, Math.round(h0 * s));
+  const ctx = c.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(img, 0, 0, c.width, c.height);
+  return { width: c.width, height: c.height, data: ctx.getImageData(0, 0, c.width, c.height).data, flipY: tex.flipY };
+}
+const imageReady = (img) => img && ((img.complete !== undefined ? img.complete && img.naturalWidth > 0 : true) && (img.width || img.naturalWidth));
+
+// ---- プレビュー（読み戻した点を描く。ワールドで台の正面から見た向き）----
+let previewCloud = null, yaw = 0, pitch = 0.25, raf = 0, dragging = false, lastX = 0, lastY = 0;
+function startPreview(cloud) {
+  previewCloud = cloud;
+  yaw = 0; pitch = 0.25;
+  cancelAnimationFrame(raf);
+  const loop = () => { if (!dragging) yaw += 0.004; drawPreview(); raf = requestAnimationFrame(loop); };
+  loop();
+}
+const cv = $("preview");
+cv.onpointerdown = (e) => { dragging = true; lastX = e.clientX; lastY = e.clientY; cv.setPointerCapture(e.pointerId); };
+cv.onpointermove = (e) => { if (!dragging) return; yaw += (e.clientX - lastX) * 0.01; pitch = Math.max(-1.4, Math.min(1.4, pitch + (e.clientY - lastY) * 0.01)); lastX = e.clientX; lastY = e.clientY; };
+cv.onpointerup = () => dragging = false;
+
+function drawPreview() {
+  const c = previewCloud, ctx = cv.getContext("2d"), W = cv.width, H = cv.height;
+  const img = ctx.createImageData(W, H);
+  const zbuf = new Float32Array(W * H).fill(-Infinity);
+  const cx = (c.min[0] + c.max[0]) / 2, cy = (c.min[1] + c.max[1]) / 2, cz = (c.min[2] + c.max[2]) / 2;
+  const span = Math.max(c.max[0] - c.min[0], c.max[1] - c.min[1], c.max[2] - c.min[2]) || 1;
+  const s = W * 0.8 / span, cyw = Math.cos(yaw), syw = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
+  const n = c.count, step = Math.max(1, Math.floor(n / 120000));
+  for (let i = 0; i < n; i += step) {
+    // Unity の座標で、台の手前（+Z 側）から −Z 向きに見る。画面の右は Unity の −X
+    let x = c.positions[i * 3] - cx, y = c.positions[i * 3 + 1] - cy, z = c.positions[i * 3 + 2] - cz;
+    const x1 = x * cyw + z * syw, z1 = -x * syw + z * cyw;
+    const y2 = y * cp - z1 * sp, z2 = y * sp + z1 * cp;
+    const px = Math.round(W / 2 - x1 * s), py = Math.round(H / 2 - y2 * s);
+    for (let oy = 0; oy < 2; oy++) for (let ox = 0; ox < 2; ox++) {
+      const X = px + ox, Y = py + oy;
+      if (X < 0 || Y < 0 || X >= W || Y >= H) continue;
+      const k = Y * W + X;
+      if (z2 < zbuf[k]) continue;
+      zbuf[k] = z2;
+      img.data[k * 4] = c.colors[i * 3]; img.data[k * 4 + 1] = c.colors[i * 3 + 1]; img.data[k * 4 + 2] = c.colors[i * 3 + 2]; img.data[k * 4 + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+// ---- GitHub へのアップロード（Contents API）----
+$("upload").onclick = async () => {
+  const msg = $("uploadMsg");
+  const repo = $("repo").value.trim(), token = $("token").value.trim();
+  if (!result) return;
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || !token) { show(msg, "リポジトリとトークンを入れてください", "bad"); return; }
+  remember();
+  const path = `scans/slot${result.slot}.png`;
+  const api = `https://api.github.com/repos/${repo}/contents/${path}`;
+  const headers = { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" };
+  $("upload").disabled = true;
+  try {
+    show(msg, "アップロード中…", "busy");
+    let sha;
+    const cur = await fetch(api, { headers });
+    if (cur.ok) sha = (await cur.json()).sha;
+    let bin = "";
+    for (let i = 0; i < result.png.length; i += 0x8000) bin += String.fromCharCode(...result.png.subarray(i, i + 0x8000));
+    const res = await fetch(api, { method: "PUT", headers, body: JSON.stringify({ message: `Upload slot${result.slot}: ${result.title || "scan"}`, content: btoa(bin), sha }) });
+    if (!res.ok) throw new Error(`${res.status} ${(await res.json().catch(() => ({}))).message || ""}`);
+    const url = pagesBase() + `slot${result.slot}.png`;
+    $("checkUrl").value = url;
+    show(msg, `アップロードしました。1〜2分で公開されます:\n${url}\nワールドでは「スロット ${result.slot}」を押してください（下の「確かめる」で公開を確認できます）。`, "ok");
+  } catch (e) {
+    show(msg, "アップロードできませんでした: " + e.message + "\n（トークンの権限・期限、リポジトリ名を確認）", "bad");
+  } finally {
+    $("upload").disabled = false;
+  }
+};
+
+// ---- 公開された画像の確認 ----
+$("check").onclick = async () => {
+  const msg = $("checkMsg");
+  const url = $("checkUrl").value.trim() || $("checkUrl").placeholder;
+  try {
+    show(msg, "確かめています…", "busy");
+    const res = await fetch(url + (url.includes("?") ? "&" : "?") + "t=" + Date.now(), { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}（まだ公開されていないか、URL が違います）`);
+    if (res.redirected) throw new Error("転送（リダイレクト）される URL です。VRChat では読めません");
+    const blob = await res.blob();
+    const bmp = await createImageBitmap(blob, { colorSpaceConversion: "none", premultiplyAlpha: "none" });
+    const c = document.createElement("canvas");
+    c.width = bmp.width; c.height = bmp.height;
+    const ctx = c.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(bmp, 0, 0);
+    const back = decodePointCloud(c.width, c.height, ctx.getImageData(0, 0, c.width, c.height).data);
+    const host = new URL(url).hostname;
+    const trusted = /(^|\.)github\.io$|^dl\.dropbox(usercontent)?\.com$|^i\.imgur\.com$|^i\.ibb\.co$|^i\.postimg\.cc$|^images2\.imgbox\.com$|^images4\.imagebam\.com$|^i\.redd\.it$|^pbs\.twimg\.com$|\.vrcdn\.cloud$|\.disbridge\.com$|^assets\.vrchat\.com$|^i\.ytimg\.com$/.test(host);
+    if (!back.ok) throw new Error(back.reason);
+    show(msg, `OK: 点群PNGとして読めます（${back.count.toLocaleString()} 点、${c.width}×${c.height}、${(blob.size / 1024).toFixed(0)} KB）\n題名: ${back.title || "（なし）"}　日時: ${back.date}\n` +
+      (trusted ? "VRChat が信頼しているサイトです。" : "注意: VRChat が信頼していないサイトです（見る人全員に Allow Untrusted URLs が必要）"), trusted ? "ok" : "bad");
+    startPreviewIfNone(back);
+  } catch (e) {
+    show(msg, "読めませんでした: " + (e.message || e), "bad");
+  }
+};
+function startPreviewIfNone(back) { if (!result) { $("resultSection").hidden = false; startPreview(back); } }
+
+window.scan2pngTest = { loadSource, buildCloud, encodePointCloud, decodePointCloud, pngBytes }; // 動作確認用
+</script>
+</body>
+</html>
