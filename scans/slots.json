@@ -26,5 +26,12 @@
     "source": "https://www.kiriengine.app/share/shareModel/f14e179652b942c38ce931d389f4be15",
     "points": 120000,
     "kind": "GLB メッシュ"
+  },
+  "5": {
+    "title": "まんまるおきつねさま",
+    "time": "2026-10-31T23:45:31+09:00",
+    "source": "https://scaniverse.com/scan/rb7zxyv3o3mbhrmo",
+    "points": 120000,
+    "kind": "SPZ（Gaussian Splatting）"
   }
 }
