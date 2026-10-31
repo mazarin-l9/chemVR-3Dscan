@@ -19,5 +19,12 @@
     "source": "https://scaniverse.com/scan/c7sciyccei6xultr",
     "points": 113378,
     "kind": "SPZ（Gaussian Splatting）"
+  },
+  "4": {
+    "title": "吉田松陰withB",
+    "time": "2026-10-31T12:43:22+09:00",
+    "source": "https://www.kiriengine.app/share/shareModel/f14e179652b942c38ce931d389f4be15",
+    "points": 120000,
+    "kind": "GLB メッシュ"
   }
 }
