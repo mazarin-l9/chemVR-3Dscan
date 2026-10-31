@@ -199,6 +199,127 @@ export function removeOutliers(cloud, trim = 0.005, margin = 0.15) {
   return { positions, colors };
 }
 
+// ===== 床・台の面と、離れたかけらを消す（物のスキャン向け）=====
+// 物のスキャンには、置いていた机や床の一部と、宙に浮いた小さなかけらが入りやすい。
+// 表示はいちばん長い辺に合わせて縮めるので、それらがあると物が小さく見える。
+// 1) 下のほうにある大きな平面（傾いていてもよい）を探して、その面と面より下の点を消す
+// 2) 点を小さな箱に分けてつながりを調べ、いちばん大きなかたまりだけ残す
+// cloud は Unity の座標（Y が上）
+export function cleanObject(cloud, { seed = 3 } = {}) {
+  const ground = findGroundPlane(cloud, seed);
+  let c = ground ? cutBelowPlane(cloud, ground) : cloud;
+  c = keepLargestCluster(c);
+  return { cloud: c, plane: ground, box: bounds(c.positions) };
+}
+
+function bounds(p) {
+  const mn = [Infinity, Infinity, Infinity], mx = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < p.length; i += 3)
+    for (let a = 0; a < 3; a++) { mn[a] = Math.min(mn[a], p[i + a]); mx[a] = Math.max(mx[a], p[i + a]); }
+  return { mn, mx, diag: Math.hypot(mx[0] - mn[0], mx[1] - mn[1], mx[2] - mn[2]) };
+}
+
+function pick(cloud, keep) {
+  const n = keep.length, positions = new Float32Array(n * 3), colors = new Uint8Array(n * 3);
+  for (let k = 0; k < n; k++)
+    for (let a = 0; a < 3; a++) { positions[k * 3 + a] = cloud.positions[keep[k] * 3 + a]; colors[k * 3 + a] = cloud.colors[keep[k] * 3 + a]; }
+  return { positions, colors };
+}
+
+// 床・台の平面 { nx, ny, nz, d, t }（なければ null）。速くするため、点を間引いて調べる
+export function findGroundPlane(cloud, seed = 3) {
+  const all = cloud.positions, total = all.length / 3;
+  if (total < 1000) return null;
+  const stride = Math.max(1, Math.floor(total / 40000));
+  const idx = [];
+  for (let i = 0; i < total; i += stride) idx.push(i);
+  const n = idx.length;
+  const P = (q, a) => all[idx[q] * 3 + a];
+  const b = bounds(all), height = b.mx[1] - b.mn[1];
+  const t = Math.max(0.003, b.diag * 0.008); // 面の厚み
+  // 下から 40% の高さにある点から3点を選んで平面を作り、乗っている点がいちばん多いものを採る
+  const low = [];
+  for (let q = 0; q < n; q++) if (P(q, 1) < b.mn[1] + height * 0.4) low.push(q);
+  if (low.length < 100) return null;
+  const r = rng(seed);
+  let best = null, bestCount = 0;
+  for (let it = 0; it < 300; it++) {
+    const [i, j, k] = [0, 0, 0].map(() => low[Math.floor(r() * low.length)]);
+    const ux = P(j, 0) - P(i, 0), uy = P(j, 1) - P(i, 1), uz = P(j, 2) - P(i, 2);
+    const vx = P(k, 0) - P(i, 0), vy = P(k, 1) - P(i, 1), vz = P(k, 2) - P(i, 2);
+    let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+    const len = Math.hypot(nx, ny, nz);
+    if (len < 1e-9) continue;
+    nx /= len; ny /= len; nz /= len;
+    if (ny < 0) { nx = -nx; ny = -ny; nz = -nz; }
+    if (ny < Math.cos(35 * Math.PI / 180)) continue; // ほぼ水平な面だけ
+    const d = -(nx * P(i, 0) + ny * P(i, 1) + nz * P(i, 2));
+    let count = 0;
+    for (let q = 0; q < n; q++) if (Math.abs(nx * P(q, 0) + ny * P(q, 1) + nz * P(q, 2) + d) < t) count++;
+    if (count > bestCount) { bestCount = count; best = { nx, ny, nz, d, t }; }
+  }
+  // 点の 8% 以上が乗る面だけを床・台とみなす（小さな平らな部分は物の一部かもしれない）
+  if (!best || bestCount < n * 0.08) return null;
+  let above = 0;
+  for (let q = 0; q < n; q++) if (best.nx * P(q, 0) + best.ny * P(q, 1) + best.nz * P(q, 2) + best.d > best.t * 1.5) above++;
+  if (above < n * 0.02) return null; // ほとんど消えるなら、平面ではなく物そのものだった
+  return best;
+}
+
+// 平面より上（物）の点だけ残す
+export function cutBelowPlane(cloud, pl) {
+  const p = cloud.positions, n = p.length / 3, keep = [];
+  for (let q = 0; q < n; q++) if (pl.nx * p[q * 3] + pl.ny * p[q * 3 + 1] + pl.nz * p[q * 3 + 2] + pl.d > pl.t * 1.5) keep.push(q);
+  return pick(cloud, keep);
+}
+
+// 箱（少し広げる）の中の点だけ残す
+function cropToBox(cloud, box) {
+  const p = cloud.positions, n = p.length / 3, m = box.diag * 0.03, keep = [];
+  for (let q = 0; q < n; q++) {
+    let ok = true;
+    for (let a = 0; a < 3 && ok; a++) ok = p[q * 3 + a] >= box.mn[a] - m && p[q * 3 + a] <= box.mx[a] + m;
+    if (ok) keep.push(q);
+  }
+  return pick(cloud, keep);
+}
+
+export function keepLargestCluster(cloud) {
+  const p = cloud.positions, n = p.length / 3;
+  if (n < 1000) return cloud;
+  const b = bounds(p);
+  // 箱の大きさ：全体の 1/70 か、点の間隔の目安（表面の点として √(面積/点の数)）の 2.5 倍の大きいほう。点がまばらでもつながるように
+  const cell = Math.max(1e-4, b.diag / 70, 2.5 * b.diag / Math.sqrt(n));
+  const key = (i) => Math.floor((p[i * 3] - b.mn[0]) / cell) + "," + Math.floor((p[i * 3 + 1] - b.mn[1]) / cell) + "," + Math.floor((p[i * 3 + 2] - b.mn[2]) / cell);
+  const cells = new Map(); // "x,y,z" → 点の番号の配列
+  for (let i = 0; i < n; i++) { const k = key(i); let a = cells.get(k); if (!a) cells.set(k, a = []); a.push(i); }
+  const label = new Map();
+  let bestLabel = -1, bestSize = 0, next = 0;
+  for (const start of cells.keys()) {
+    if (label.has(start)) continue;
+    const id = next++;
+    let size = 0;
+    const stack = [start];
+    label.set(start, id);
+    while (stack.length) {
+      const k = stack.pop();
+      size += cells.get(k).length;
+      const [x, y, z] = k.split(",").map(Number);
+      for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) {
+        const nk = (x + dx) + "," + (y + dy) + "," + (z + dz);
+        if (cells.has(nk) && !label.has(nk)) { label.set(nk, id); stack.push(nk); }
+      }
+    }
+    if (size > bestSize) { bestSize = size; bestLabel = id; }
+  }
+  // いちばん大きなかたまりが全体の半分もないなら、物が分かれて写っている（かけらではない）ので消さない
+  if (bestSize < n * 0.5) return cloud;
+  const keep = [];
+  for (const [k, a] of cells) if (label.get(k) === bestLabel) for (const i of a) keep.push(i);
+  keep.sort((x, y) => x - y);
+  return pick(cloud, keep);
+}
+
 // ===== 三角形の表面から点を取る =====
 // meshes: [{ positions: Float32Array, indices: Uint32Array|null, uvs: Float32Array|null, colors: Float32Array|null（0..1 の sRGB）,
 //            texture: { width, height, data: Uint8ClampedArray（上の行から RGBA）, flipY: bool } | null, tint: [r,g,b]（0..1 sRGB） }]
@@ -434,16 +555,33 @@ function half(h) {
 
 // ===== 1つにまとめる：ファイルの中身 → 点群（Unity の座標）=====
 // source: { cloud }（PLY/SPZ の結果）または { meshes }（sampleMeshes の入力）
-export function buildCloud(source, { budget = DEFAULT_POINTS, up = "y", outliers = true } = {}) {
+// clean: 床・台の面と離れたかけらを消す（物のスキャン向け。部屋・景色のスキャンでは false に）
+export function buildCloud(source, { budget = DEFAULT_POINTS, up = "y", outliers = true, clean = false } = {}) {
   budget = Math.min(MAX_POINTS, Math.max(1000, budget | 0));
+  // 消す分を見込んで多めに点を取り、最後に budget まで減らす
+  const take = clean ? budget * 3 : budget;
   let cloud;
-  if (source.meshes) cloud = sampleMeshes(source.meshes, budget);
-  else if (source.cloud.faces && source.cloud.positions.length / 3 < budget) {
+  if (source.meshes) cloud = sampleMeshes(source.meshes, take);
+  else if (source.cloud.faces && source.cloud.positions.length / 3 < take) {
     // 頂点の少ないメッシュの PLY は表面から取る（頂点色を補間）
     const c = source.cloud, colors = new Float32Array(c.colors.length);
     for (let i = 0; i < colors.length; i++) colors[i] = c.colors[i] / 255;
-    cloud = sampleMeshes([{ positions: c.positions, indices: c.faces, colors, uvs: null, texture: null }], budget);
-  } else cloud = subsample(source.cloud, budget);
+    cloud = sampleMeshes([{ positions: c.positions, indices: c.faces, colors, uvs: null, texture: null }], take);
+  } else cloud = subsample(source.cloud, take);
   if (outliers) cloud = removeOutliers(cloud);
-  return toUnity(cloud, up);
+  cloud = toUnity(cloud, up);
+  if (clean) {
+    const c = cleanObject(cloud);
+    cloud = c.cloud;
+    // 物が全体の一部だけだったときは、メッシュならもう一度たくさん点を取り、床の面より上・物の箱の中だけ使う
+    const kept = cloud.positions.length / 3;
+    if (source.meshes && kept < budget && kept > 0) {
+      const more = Math.min(4000000, Math.ceil(take * budget / kept * 1.3));
+      let again = toUnity(sampleMeshes(source.meshes, more, 11), up);
+      if (c.plane) again = cutBelowPlane(again, c.plane);
+      cloud = cropToBox(again, c.box);
+    }
+    cloud = subsample(cloud, budget);
+  }
+  return cloud;
 }

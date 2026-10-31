@@ -1,0 +1,17 @@
+{
+  "name": "chemvr-scan-intake",
+  "private": true,
+  "type": "module",
+  "description": "フォームから届いた 3D スキャンを点群PNGにしてスロットに入れる（GitHub Actions 用）",
+  "scripts": {
+    "intake": "node intake.mjs"
+  },
+  "dependencies": {
+    "@gltf-transform/core": "4.5.1",
+    "@gltf-transform/extensions": "4.5.1",
+    "draco3dgltf": "1.5.7",
+    "fflate": "0.8.3",
+    "jpeg-js": "0.4.4",
+    "pngjs": "7.0.0"
+  }
+}

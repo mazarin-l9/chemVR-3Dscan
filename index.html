@@ -53,6 +53,7 @@
     <label for="budget">点の数: <b id="budgetText"></b>（Quest は 12万点くらいまでがおすすめ・上限 20万）</label>
     <input type="range" id="budget" min="20000" max="200000" step="10000" value="120000">
     <label><input type="checkbox" id="outliers" checked> 遠くに飛んだ点（ゴミ）を除く</label>
+    <label><input type="checkbox" id="clean" checked> 床・台の面と、離れたかけらを消す（物のスキャン向け。部屋や景色のスキャンでは外す）</label>
     <button id="convert" disabled>2. 変換する</button>
     <div id="convertMsg" class="msg" hidden></div>
   </section>
@@ -134,7 +135,7 @@ $("convert").onclick = async () => {
     const source = await loadSource(files, (t) => show(msg, t, "busy"));
     show(msg, "点を作っています…", "busy");
     await new Promise(r => setTimeout(r, 30));
-    const cloud = buildCloud(source, { budget: +$("budget").value, up: $("up").value, outliers: $("outliers").checked });
+    const cloud = buildCloud(source, { budget: +$("budget").value, up: $("up").value, outliers: $("outliers").checked, clean: $("clean").checked });
     const title = $("title").value.trim();
     const img = encodePointCloud(cloud.positions, cloud.colors, { title, date: new Date() });
     const back = decodePointCloud(img.width, img.height, img.rgba); // 書いた内容を読み戻して確かめる

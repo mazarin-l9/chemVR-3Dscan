@@ -1,0 +1,72 @@
+# フォームから incoming/ に届いたスキャンを点群PNGにして、空いているスロットに入れる
+# （Google フォームの Apps Script が incoming/ にファイルを置くと動く。手で動かすときは Actions → scan-intake → Run workflow）
+name: scan-intake
+
+on:
+  push:
+    branches: [main]
+    paths: ["incoming/**"]
+  workflow_dispatch:
+
+# 同時に2つ動くと同じスロットを取り合うので、1つずつ順番に
+concurrency:
+  group: scan-intake
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pages: write
+  issues: write
+
+jobs:
+  intake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install
+        working-directory: tools
+        run: npm install --no-audit --no-fund
+
+      - name: Convert
+        run: node tools/intake.mjs
+
+      - name: Commit
+        run: |
+          git config user.name "scan-intake"
+          git config user.email "scan-intake@users.noreply.github.com"
+          git add -A scans incoming
+          if git diff --cached --quiet; then
+            echo "変更なし"
+            exit 0
+          fi
+          git commit -m "scan-intake: $(git diff --cached --name-only -- scans | grep -o 'slot[0-9]*\.png' | tr '\n' ' ')"
+          for i in 1 2 3; do git push && break; git pull --rebase origin main; done
+          echo "pushed=1" >> "$GITHUB_ENV"
+
+      # Actions のトークンでの push では Pages が作り直されないことがあるので、作り直しを頼む
+      - name: Rebuild Pages
+        if: env.pushed == '1'
+        run: |
+          curl -s -X POST -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/pages/builds" || true
+
+      # 変換できなかったものがあれば Issue を作る（GitHub からメールで届く）
+      - name: Report failures
+        if: hashFiles('.intake-failures.txt') != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "次の回答はスロットに入れられませんでした（incoming/failed/ に移してあります）。"
+            echo
+            cat .intake-failures.txt
+          } > issue.md
+          gh issue create --repo "${{ github.repository }}" --title "スキャンを変換できませんでした" --body-file issue.md
