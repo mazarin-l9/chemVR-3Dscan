@@ -81,13 +81,17 @@ async function fetchModel(job) {
   const url = new URL(job.link.trim());
   // KIRI Engine の共有リンク → 共有ページが読み込むモデル（Draco 圧縮の GLB）
   const kiri = url.hostname.endsWith("kiriengine.app") && url.pathname.match(/shareModel\/([0-9a-f]{32})/i);
-  const target = kiri ? `https://display.kiriengine.com/${kiri[1]}/3DModel_Display.glb` : url.href;
+  // Scaniverse の共有リンク（https://scaniverse.com/scan/<id>）→ 共有ページが読み込む Gaussian Splatting（SPZ）
+  const scaniverse = url.hostname.endsWith("scaniverse.com") && url.pathname.match(/\/scan\/([0-9a-z]+)/i);
+  const target = kiri ? `https://display.kiriengine.com/${kiri[1]}/3DModel_Display.glb`
+               : scaniverse ? `https://scaniverse.com/api/media/${scaniverse[1]}/gaussians.spz`
+               : url.href;
   const res = await fetch(target, { redirect: "follow" });
   if (!res.ok) throw new Error(`ダウンロードできません（HTTP ${res.status}）: ${target}`);
   const size = Number(res.headers.get("content-length") || 0);
   if (size > MAX_DOWNLOAD) throw new Error(`ファイルが大きすぎます（${(size / 1048576).toFixed(0)} MB）`);
   const bytes = new Uint8Array(await res.arrayBuffer());
-  const fileName = kiri ? "kiri.glb" : basename(url.pathname) || "model";
+  const fileName = kiri ? "kiri.glb" : scaniverse ? "scaniverse.spz" : basename(url.pathname) || "model";
   return { bytes, fileName };
 }
 

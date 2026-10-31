@@ -320,6 +320,21 @@ export function keepLargestCluster(cloud) {
   return pick(cloud, keep);
 }
 
+// Gaussian Splatting は、周りの景色や遠くの空まで点（splat）があり、何百 m にも広がる。
+// 真ん中（各軸の中央値）から近い順に 8 割の点が入る半径の 1.4 倍より外を捨てて、撮った物のまわりだけにする
+export function cropSplat(cloud) {
+  const p = cloud.positions, n = p.length / 3;
+  if (n < 1000) return cloud;
+  const med = [0, 1, 2].map(a => { const v = new Float32Array(n); for (let i = 0; i < n; i++) v[i] = p[i * 3 + a]; v.sort(); return v[n >> 1]; });
+  const d = new Float32Array(n);
+  for (let i = 0; i < n; i++) d[i] = Math.hypot(p[i * 3] - med[0], p[i * 3 + 1] - med[1], p[i * 3 + 2] - med[2]);
+  const sorted = Float32Array.from(d).sort();
+  const r = sorted[Math.floor(n * 0.8)] * 1.4;
+  const keep = [];
+  for (let i = 0; i < n; i++) if (d[i] <= r) keep.push(i);
+  return pick(cloud, keep);
+}
+
 // ===== 三角形の表面から点を取る =====
 // meshes: [{ positions: Float32Array, indices: Uint32Array|null, uvs: Float32Array|null, colors: Float32Array|null（0..1 の sRGB）,
 //            texture: { width, height, data: Uint8ClampedArray（上の行から RGBA）, flipY: bool } | null, tint: [r,g,b]（0..1 sRGB） }]
@@ -567,7 +582,7 @@ export function buildCloud(source, { budget = DEFAULT_POINTS, up = "y", outliers
     const c = source.cloud, colors = new Float32Array(c.colors.length);
     for (let i = 0; i < colors.length; i++) colors[i] = c.colors[i] / 255;
     cloud = sampleMeshes([{ positions: c.positions, indices: c.faces, colors, uvs: null, texture: null }], take);
-  } else cloud = subsample(source.cloud, take);
+  } else cloud = subsample(source.cloud.kind === "splat" ? cropSplat(source.cloud) : source.cloud, take);
   if (outliers) cloud = removeOutliers(cloud);
   cloud = toUnity(cloud, up);
   if (clean) {
