@@ -37,6 +37,8 @@ jobs:
 
       - name: Convert
         run: node tools/intake.mjs
+        env:
+          TZ: Asia/Tokyo # 題名と一緒に画像に入れる日時を日本の時刻にする
 
       - name: Commit
         run: |
