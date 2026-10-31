@@ -14,7 +14,9 @@ const MAX_BYTES = 35 * 1024 * 1024; // Apps Script から一度に送れる大�
 function onFormSubmit(e) {
   const answers = e.namedValues; // { 質問の文: [答え] }
   const title = answerOf(answers, /タイトル|題名/);
-  const data = answerOf(answers, /スキャン|データ|リンク|ファイル|3d/i);
+  // スキャンの質問は「リンク」と「ファイルのアップロード」の2つあってもよい。答えのある方を使う（ファイルを優先）
+  const scans = answersOf(answers, /スキャン|データ|リンク|ファイル|3d/i, /タイトル|題名/);
+  const data = scans.find(a => /drive\.google\.com/.test(a)) || scans.find(a => /^https?:\/\//.test(a)) || scans[0] || '';
   const now = new Date();
   const stamp = Utilities.formatDate(now, 'Asia/Tokyo', 'yyyyMMdd-HHmmss') + '-' + Math.floor(Math.random() * 1e6);
   const job = { title: title.slice(0, 40), time: Utilities.formatDate(now, 'Asia/Tokyo', "yyyy-MM-dd'T'HH:mm:ssXXX") };
@@ -43,10 +45,22 @@ function onFormSubmit(e) {
   }
 }
 
-// 質問の文に pattern を含む最初の答え
+// 質問の文に pattern を含む最初の空でない答え
 function answerOf(answers, pattern) {
-  for (const q in answers) if (pattern.test(q)) return String(answers[q][0] || '').trim();
-  return '';
+  const all = answersOf(answers, pattern, null);
+  return all.length ? all[0] : '';
+}
+
+// 質問の文に pattern を含み（exclude を含まない）、空でない答えをすべて。ファイルのアップロードが複数あれば「, 」で分ける
+function answersOf(answers, pattern, exclude) {
+  const out = [];
+  for (const q in answers) {
+    if (!pattern.test(q) || (exclude && exclude.test(q))) continue;
+    for (const v of answers[q]) {
+      for (const part of String(v || '').split(/,\s*/)) if (part.trim()) out.push(part.trim());
+    }
+  }
+  return out;
 }
 
 function safeName(name) {
