@@ -47,5 +47,12 @@
     "source": "https://scaniverse.com/scan/yf6cjwdf743m3jsz",
     "points": 120000,
     "kind": "Draco メッシュ（Scaniverse）"
+  },
+  "8": {
+    "title": "庭草2",
+    "time": "2026-11-01T19:14:19+09:00",
+    "source": "https://scaniverse.com/scan/42akustkzuhye5vc",
+    "points": 89831,
+    "kind": "SPZ（Gaussian Splatting）"
   }
 }
