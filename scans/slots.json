@@ -33,5 +33,12 @@
     "source": "https://scaniverse.com/scan/rb7zxyv3o3mbhrmo",
     "points": 120000,
     "kind": "SPZ（Gaussian Splatting）"
+  },
+  "6": {
+    "title": "野菜かご",
+    "time": "2026-11-01T10:33:30+09:00",
+    "source": "https://scaniverse.com/scan/4jp6f64ohbcfjy6j",
+    "points": 120000,
+    "kind": "Draco メッシュ（Scaniverse）"
   }
 }
