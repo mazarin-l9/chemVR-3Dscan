@@ -18,6 +18,7 @@ import { encodePointCloud, decodePointCloud, pngBytes, parsePLY, parseSPZ, build
 
 const SLOT_COUNT = 64;
 let io; // glTF の読み込み（Draco 付き）。最初に使うときに作る
+let dracoModule; // Draco だけのメッシュ（.drc）の読み込み
 const MAX_DOWNLOAD = 150 * 1024 * 1024;
 
 const slotsPath = "scans/slots.json";
@@ -35,8 +36,8 @@ for (const name of jobs) {
     job = JSON.parse(readFileSync(jobPath, "utf8"));
     const slot = nextFreeSlot();
     if (!slot) throw new Error("空いているスロットがありません（64 個すべて使用済み）");
-    const { bytes, fileName } = await fetchModel(job);
-    const source = await loadSource(bytes, fileName);
+    const { bytes, fileName, texture } = await fetchModel(job);
+    const source = await loadSource(bytes, fileName, texture);
     const cloud = buildCloud(source, { budget: DEFAULT_POINTS, up: "y", outliers: true, clean: true });
     const title = (job.title || basename(fileName, extname(fileName))).trim().slice(0, 40);
     const date = job.time ? new Date(job.time) : new Date();
@@ -86,7 +87,15 @@ async function fetchModel(job) {
   const target = kiri ? `https://display.kiriengine.com/${kiri[1]}/3DModel_Display.glb`
                : scaniverse ? `https://scaniverse.com/api/media/${scaniverse[1]}/gaussians.spz`
                : url.href;
-  const res = await fetch(target, { redirect: "follow" });
+  let res = await fetch(target, { redirect: "follow" });
+  if (scaniverse && res.status === 404) {
+    // Scaniverse のメッシュのスキャン（Splat ではない）は、Draco のメッシュ（mesh.drc）とテクスチャ（tex.jpg）で配られている
+    const base = `https://scaniverse.com/api/media/${scaniverse[1]}/`;
+    const [mesh, tex] = await Promise.all([fetch(base + "mesh.drc"), fetch(base + "tex.jpg")]);
+    if (!mesh.ok) throw new Error(`ダウンロードできません（Splat も メッシュも見つかりません。HTTP ${mesh.status}）: ${base}`);
+    return { bytes: new Uint8Array(await mesh.arrayBuffer()), fileName: "scaniverse.drc",
+             texture: tex.ok ? new Uint8Array(await tex.arrayBuffer()) : null };
+  }
   if (!res.ok) throw new Error(`ダウンロードできません（HTTP ${res.status}）: ${target}`);
   const size = Number(res.headers.get("content-length") || 0);
   if (size > MAX_DOWNLOAD) throw new Error(`ファイルが大きすぎます（${(size / 1048576).toFixed(0)} MB）`);
@@ -96,7 +105,7 @@ async function fetchModel(job) {
 }
 
 // ===== 読み込み（Web 版の loadSource と同じ結果の形にする）=====
-async function loadSource(bytes, fileName) {
+async function loadSource(bytes, fileName, texture = null) {
   const head = new TextDecoder().decode(bytes.subarray(0, 4));
   let ext = extname(fileName).toLowerCase();
   if (head === "glTF") ext = ".glb";
@@ -110,6 +119,7 @@ async function loadSource(bytes, fileName) {
   }
   if (ext === ".spz") return { cloud: await parseSPZ(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)), kind: "SPZ（Gaussian Splatting）" };
   if (ext === ".glb") return { meshes: await loadGlb(bytes), kind: "GLB メッシュ" };
+  if (ext === ".drc") return { meshes: await loadDrc(bytes, texture), kind: "Draco メッシュ（Scaniverse）" };
   if (ext === ".zip") {
     const files = unzipSync(bytes);
     const names = Object.keys(files).filter(n => !n.endsWith("/") && !n.startsWith("__MACOSX"));
@@ -169,6 +179,40 @@ async function loadGlb(bytes) {
   });
   if (!meshes.length) throw new Error("GLB にメッシュがありません");
   return meshes;
+}
+
+// Draco で圧縮したメッシュ（.drc。Scaniverse のメッシュのスキャン）とテクスチャ。UV は OpenGL と同じく下が 0
+async function loadDrc(bytes, textureBytes) {
+  if (!dracoModule) dracoModule = await draco3d.createDecoderModule();
+  const m = dracoModule, decoder = new m.Decoder(), buf = new m.DecoderBuffer(), mesh = new m.Mesh();
+  try {
+    buf.Init(new Int8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength), bytes.byteLength);
+    if (decoder.GetEncodedGeometryType(buf) !== m.TRIANGULAR_MESH) throw new Error("Draco のファイルがメッシュではありません");
+    const status = decoder.DecodeBufferToMesh(buf, mesh);
+    if (!status.ok()) throw new Error("Draco のメッシュを読めません: " + status.error_msg());
+    const n = mesh.num_points();
+    const read = (type, comps) => {
+      const id = decoder.GetAttributeId(mesh, type);
+      if (id < 0) return null;
+      const arr = new m.DracoFloat32Array();
+      decoder.GetAttributeFloatForAllPoints(mesh, decoder.GetAttribute(mesh, id), arr);
+      const out = new Float32Array(n * comps);
+      for (let i = 0; i < out.length; i++) out[i] = arr.GetValue(i);
+      m.destroy(arr);
+      return out;
+    };
+    const positions = read(m.POSITION, 3), uvs = read(m.TEX_COORD, 2);
+    const faces = mesh.num_faces(), indices = new Uint32Array(faces * 3), face = new m.DracoInt32Array();
+    for (let f = 0; f < faces; f++) {
+      decoder.GetFaceFromMesh(mesh, f, face);
+      indices[f * 3] = face.GetValue(0); indices[f * 3 + 1] = face.GetValue(1); indices[f * 3 + 2] = face.GetValue(2);
+    }
+    m.destroy(face);
+    const texture = uvs && textureBytes ? decodeImage(textureBytes, "image/jpeg", true) : null;
+    return [{ positions, indices, uvs, colors: null, texture, tint: [1, 1, 1] }];
+  } finally {
+    m.destroy(mesh); m.destroy(buf); m.destroy(decoder);
+  }
 }
 
 // OBJ（ZIP の中の .obj・.mtl・画像）。OBJ の UV は下が 0 なので flipY

@@ -208,6 +208,7 @@ export function removeOutliers(cloud, trim = 0.005, margin = 0.15) {
 export function cleanObject(cloud, { seed = 3 } = {}) {
   const ground = findGroundPlane(cloud, seed);
   let c = ground ? cutBelowPlane(cloud, ground) : cloud;
+  if (ground) c = cropToFootprint(c, ground);
   c = keepLargestCluster(c);
   return { cloud: c, plane: ground, box: bounds(c.positions) };
 }
@@ -264,6 +265,32 @@ export function findGroundPlane(cloud, seed = 3) {
   for (let q = 0; q < n; q++) if (best.nx * P(q, 0) + best.ny * P(q, 1) + best.nz * P(q, 2) + best.d > best.t * 1.5) above++;
   if (above < n * 0.02) return null; // ほとんど消えるなら、平面ではなく物そのものだった
   return best;
+}
+
+// 床・台が反っていると、平面で切っても端が残る。物の高い部分（高さの 30% より上）を真上から見た範囲を
+// 1 割広げ、その外にある低い点を捨てる
+function cropToFootprint(cloud, pl) {
+  const p = cloud.positions, n = p.length / 3;
+  if (n < 1000) return cloud;
+  const h = new Float32Array(n);
+  let top = 0;
+  for (let q = 0; q < n; q++) { h[q] = pl.nx * p[q * 3] + pl.ny * p[q * 3 + 1] + pl.nz * p[q * 3 + 2] + pl.d; if (h[q] > top) top = h[q]; }
+  const mn = [Infinity, Infinity], mx = [-Infinity, -Infinity];
+  let tall = 0;
+  for (let q = 0; q < n; q++) {
+    if (h[q] < top * 0.3) continue;
+    tall++;
+    mn[0] = Math.min(mn[0], p[q * 3]); mx[0] = Math.max(mx[0], p[q * 3]);
+    mn[1] = Math.min(mn[1], p[q * 3 + 2]); mx[1] = Math.max(mx[1], p[q * 3 + 2]);
+  }
+  if (tall < n * 0.05) return cloud;
+  const mx0 = (mx[0] - mn[0]) * 0.1, mz0 = (mx[1] - mn[1]) * 0.1;
+  const keep = [];
+  for (let q = 0; q < n; q++) {
+    const x = p[q * 3], z = p[q * 3 + 2];
+    if (h[q] >= top * 0.3 || (x >= mn[0] - mx0 && x <= mx[0] + mx0 && z >= mn[1] - mz0 && z <= mx[1] + mz0)) keep.push(q);
+  }
+  return pick(cloud, keep);
 }
 
 // 平面より上（物）の点だけ残す
