@@ -34,20 +34,6 @@
     "points": 120000,
     "kind": "SPZ（Gaussian Splatting）"
   },
-  "6": {
-    "title": "野菜かご3",
-    "time": "2026-11-01T15:34:05+09:00",
-    "source": "https://scaniverse.com/scan/pu2ycsrwfrgt36ul",
-    "points": 120000,
-    "kind": "Draco メッシュ（Scaniverse）"
-  },
-  "7": {
-    "title": "庭草",
-    "time": "2026-11-01T15:51:12+09:00",
-    "source": "https://scaniverse.com/scan/yf6cjwdf743m3jsz",
-    "points": 120000,
-    "kind": "Draco メッシュ（Scaniverse）"
-  },
   "8": {
     "title": "庭草2",
     "time": "2026-11-01T19:14:19+09:00",
