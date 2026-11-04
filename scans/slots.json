@@ -54,5 +54,12 @@
     "source": "https://scaniverse.com/scan/42akustkzuhye5vc",
     "points": 89831,
     "kind": "SPZ（Gaussian Splatting）"
+  },
+  "9": {
+    "title": "オラフノート",
+    "time": "2026-11-04T14:50:50+09:00",
+    "source": "https://scaniverse.com/scan/iahxarv2zh4qjlxz",
+    "points": 51713,
+    "kind": "SPZ（Gaussian Splatting）"
   }
 }
