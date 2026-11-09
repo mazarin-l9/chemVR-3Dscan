@@ -68,5 +68,12 @@
     "source": "https://scaniverse.com/scan/cg2vjjt2kvkmgrkn",
     "points": 120000,
     "kind": "Draco メッシュ（Scaniverse）"
+  },
+  "11": {
+    "title": "禅師河童（点群）",
+    "time": "2026-11-10T00:01:13+09:00",
+    "source": "incoming/20261110-000113-516688-Scaniverse_2026-09-22_131759_-_.ply",
+    "points": 120000,
+    "kind": "PLY 点群"
   }
 }
