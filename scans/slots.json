@@ -61,5 +61,12 @@
     "source": "https://scaniverse.com/scan/iahxarv2zh4qjlxz",
     "points": 51713,
     "kind": "SPZ（Gaussian Splatting）"
+  },
+  "10": {
+    "title": "禅師河童",
+    "time": "2026-11-09T23:53:34+09:00",
+    "source": "https://scaniverse.com/scan/cg2vjjt2kvkmgrkn",
+    "points": 120000,
+    "kind": "Draco メッシュ（Scaniverse）"
   }
 }
